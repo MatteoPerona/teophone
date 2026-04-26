@@ -219,6 +219,28 @@
       opacity: 1;
     }
 
+    #sounds-btn {
+      position: fixed;
+      bottom: 16px;
+      right: 20px;
+      background: none;
+      border: 1px solid #333;
+      color: #666;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 8px;
+      cursor: pointer;
+      border-radius: 2px;
+      z-index: 5;
+    }
+
+    #sounds-btn:hover {
+      border-color: #666;
+      color: #aaa;
+    }
+
     #record-btn {
       position: fixed;
       top: 16px;
@@ -322,10 +344,11 @@
 <body>
   <canvas id="canvas"></canvas>
   <input type="file" id="sample-upload" accept="audio/*" style="display:none">
-  <button id="mode-toggle">throw</button>
+  <button id="mode-toggle">drag</button>
   <button id="pause-btn">pause</button>
   <button id="record-btn">rec</button>
   <span id="shape-indicator">square</span>
+  <button id="sounds-btn">sounds</button>
   <div id="sound-menu">
     <h3>sounds</h3>
     <div id="sound-rows"></div>
@@ -757,13 +780,15 @@
       keys.forEach((key, i) => {
         const type = STONE_KEYS[key];
         const x = startX + i * spacing;
+        const isSelected = key === selectedKey;
         const hasCustom = !!customSamples[key];
-        ctx.fillStyle = hasCustom ? '#888' : '#333';
+        const color = isSelected ? '#fff' : hasCustom ? '#888' : '#333';
+        ctx.fillStyle = color;
         ctx.fillText(key, x, textY);
 
         ctx.beginPath();
         ctx.arc(x, centerY, type.radius * 0.3, 0, Math.PI * 2);
-        ctx.fillStyle = hasCustom ? '#888' : '#333';
+        ctx.fillStyle = color;
         ctx.fill();
       });
     }
@@ -814,16 +839,39 @@
 
     buildSoundMenu();
 
+    const soundsBtn = document.getElementById('sounds-btn');
+    soundsBtn.addEventListener('click', () => {
+      soundMenu.classList.toggle('open');
+    });
+
     // Toggle menu on click inside the ball box
+    let selectedKey = 'g';
+
     function isInsideKeyBox(x, y) {
       const { boxLeft, boxTop, boxRight, boxBottom } = getKeyHintBounds();
       return x >= boxLeft && x <= boxRight && y >= boxTop && y <= boxBottom;
     }
 
+    function keyHintAtPoint(x, y) {
+      const { keys, startX, centerY, textY, spacing } = getKeyHintBounds();
+      for (let i = 0; i < keys.length; i++) {
+        const kx = startX + i * spacing;
+        if (Math.abs(x - kx) < 16 && y >= centerY - 16 && y <= textY + 8) {
+          return keys[i];
+        }
+      }
+      return null;
+    }
+
     canvas.addEventListener('click', (e) => {
       if (isInsideKeyBox(e.clientX, e.clientY)) {
-        soundMenu.classList.toggle('open');
-      } else if (soundMenu.classList.contains('open')) {
+        const key = keyHintAtPoint(e.clientX, e.clientY);
+        if (key) {
+          selectedKey = selectedKey === key ? null : key;
+          return;
+        }
+      }
+      if (soundMenu.classList.contains('open')) {
         soundMenu.classList.remove('open');
       }
     });
@@ -949,7 +997,7 @@
     }
 
     // --- Input ---
-    let mode = 'throw'; // 'throw' or 'drag'
+    let mode = 'drag'; // 'throw' or 'drag'
     const modeToggle = document.getElementById('mode-toggle');
     modeToggle.addEventListener('click', () => {
       mode = mode === 'throw' ? 'drag' : 'throw';
@@ -1086,6 +1134,17 @@
 
     canvas.addEventListener('mousedown', (e) => {
       if (isInsideKeyBox(e.clientX, e.clientY)) return;
+
+      // In drag mode with a selected key, spawn on empty space
+      if (mode === 'drag' && selectedKey && !stoneAtPoint(e.clientX, e.clientY)) {
+        initAudio();
+        const type = STONE_KEYS[selectedKey];
+        const speedMult = parseFloat(speedSlider.value);
+        const stone = new Stone(e.clientX, e.clientY, type, speedMult, selectedKey);
+        stones.push(stone);
+        return;
+      }
+
       dragging = true;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
