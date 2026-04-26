@@ -25,9 +25,10 @@
       top: 50%;
       transform: translateY(-50%);
       display: flex;
-      flex-direction: row;
+      flex-direction: column;
       align-items: center;
-      gap: 0;
+      gap: 14px;
+      width: 16px;
     }
 
     #speed-control label {
@@ -47,8 +48,7 @@
       background: #444;
       outline: none;
       transform: rotate(-90deg);
-      transform-origin: right center;
-      margin-left: -30px;
+      margin: 36px 0;
     }
 
     #speed-slider::-webkit-slider-thumb {
@@ -108,12 +108,14 @@
 
     #pulses-control {
       position: fixed;
-      left: 32px;
-      bottom: 32px;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 8px;
+      gap: 14px;
+      width: 16px;
     }
 
     #pulses-control label {
@@ -121,15 +123,19 @@
       font-size: 10px;
       letter-spacing: 2px;
       text-transform: uppercase;
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
     }
 
     #pulses-slider {
       -webkit-appearance: none;
       appearance: none;
-      width: 120px;
+      width: 80px;
       height: 2px;
       background: #444;
       outline: none;
+      transform: rotate(-90deg);
+      margin: 36px 0;
     }
 
     #pulses-slider::-webkit-slider-thumb {
