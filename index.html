@@ -21,13 +21,13 @@
 
     #speed-control {
       position: fixed;
-      right: 24px;
+      right: 12px;
       top: 50%;
       transform: translateY(-50%);
       display: flex;
       flex-direction: row;
       align-items: center;
-      gap: 2px;
+      gap: 0;
     }
 
     #speed-control label {
@@ -42,12 +42,13 @@
     #speed-slider {
       -webkit-appearance: none;
       appearance: none;
-      width: 120px;
+      width: 80px;
       height: 2px;
       background: #444;
       outline: none;
       transform: rotate(-90deg);
-      transform-origin: center;
+      transform-origin: right center;
+      margin-left: -30px;
     }
 
     #speed-slider::-webkit-slider-thumb {
@@ -172,6 +173,78 @@
       color: #ccc;
     }
 
+    #pause-btn {
+      position: fixed;
+      top: 16px;
+      right: 80px;
+      background: none;
+      border: 1px solid #444;
+      color: #888;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 2px;
+    }
+
+    #pause-btn:hover {
+      border-color: #888;
+      color: #ccc;
+    }
+
+    #pause-btn.paused {
+      border-color: #888;
+      color: #ccc;
+    }
+
+    #shape-indicator {
+      position: fixed;
+      top: 16px;
+      right: 210px;
+      border: 1px solid #444;
+      color: #888;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 2px;
+      opacity: 0;
+      transition: opacity 0.1s;
+    }
+
+    #shape-indicator.active {
+      opacity: 1;
+    }
+
+    #record-btn {
+      position: fixed;
+      top: 16px;
+      right: 150px;
+      background: none;
+      border: 1px solid #444;
+      color: #888;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 2px;
+    }
+
+    #record-btn:hover {
+      border-color: #888;
+      color: #ccc;
+    }
+
+    #record-btn.recording {
+      border-color: #a33;
+      color: #e55;
+    }
+
     #sound-menu {
       display: none;
       position: fixed;
@@ -250,6 +323,9 @@
   <canvas id="canvas"></canvas>
   <input type="file" id="sample-upload" accept="audio/*" style="display:none">
   <button id="mode-toggle">throw</button>
+  <button id="pause-btn">pause</button>
+  <button id="record-btn">rec</button>
+  <span id="shape-indicator">square</span>
   <div id="sound-menu">
     <h3>sounds</h3>
     <div id="sound-rows"></div>
@@ -343,9 +419,18 @@
     });
 
     // --- Audio ---
+    let masterGain = null;
+    let mediaStreamDest = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+
     function initAudio() {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioCtx.createGain();
+        masterGain.connect(audioCtx.destination);
+        mediaStreamDest = audioCtx.createMediaStreamDestination();
+        masterGain.connect(mediaStreamDest);
       }
     }
 
@@ -361,7 +446,7 @@
       gain.gain.value = vol;
 
       source.connect(gain);
-      gain.connect(audioCtx.destination);
+      gain.connect(masterGain);
       source.start();
     }
 
@@ -426,7 +511,7 @@
 
       noise.connect(noiseFilter);
       noiseFilter.connect(noiseGain);
-      noiseGain.connect(audioCtx.destination);
+      noiseGain.connect(masterGain);
       noise.start(now);
       noise.stop(now + duration);
 
@@ -441,20 +526,27 @@
       oscGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
 
       osc.connect(oscGain);
-      oscGain.connect(audioCtx.destination);
+      oscGain.connect(masterGain);
       osc.start(now);
       osc.stop(now + duration);
     }
 
     // --- Stone ---
     class Stone {
-      constructor(x, y, type, speedMult, key) {
+      constructor(x, y, type, speedMult, key, shape) {
         this.key = key;
+        this.shape = shape || 'circle'; // 'circle' or 'square'
+        this.axis = null; // null for circles, 'h' or 'v' for squares
         this.x = x;
         this.y = y;
         if (speedMult === 0) {
           this.vx = 0;
           this.vy = 0;
+        } else if (this.shape === 'square') {
+          this.axis = Math.random() < 0.5 ? 'h' : 'v';
+          const baseSpeed = (2 + Math.random() * 3) * speedMult;
+          this.vx = this.axis === 'h' ? baseSpeed * (Math.random() < 0.5 ? 1 : -1) : 0;
+          this.vy = this.axis === 'v' ? baseSpeed * (Math.random() < 0.5 ? 1 : -1) : 0;
         } else {
           const angle = Math.random() * Math.PI * 2;
           const baseSpeed = (2 + Math.random() * 3) * speedMult;
@@ -472,6 +564,17 @@
 
       update() {
         if (this.frozen) return;
+        // Enforce axis constraint for squares — preserve speed on the allowed axis
+        if (this.axis === 'h' && this.vy !== 0) {
+          const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+          this.vx = speed * Math.sign(this.vx || 1);
+          this.vy = 0;
+        }
+        if (this.axis === 'v' && this.vx !== 0) {
+          const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+          this.vy = speed * Math.sign(this.vy || 1);
+          this.vx = 0;
+        }
         this.x += this.vx;
         this.y += this.vy;
 
@@ -518,16 +621,21 @@
       }
 
       draw() {
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-
         if (this.flash > 0) {
           const brightness = Math.floor(this.flash * 255);
           ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
         } else {
           ctx.fillStyle = this.color;
         }
-        ctx.fill();
+
+        if (this.shape === 'square') {
+          const size = this.radius * 2;
+          ctx.fillRect(this.x - this.radius, this.y - this.radius, size, size);
+        } else {
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
 
@@ -848,6 +956,105 @@
       modeToggle.textContent = mode;
     });
 
+    const pauseBtn = document.getElementById('pause-btn');
+    pauseBtn.addEventListener('click', () => {
+      paused = !paused;
+      pauseBtn.textContent = paused ? 'play' : 'pause';
+      pauseBtn.classList.toggle('paused', paused);
+      if (!paused) lastTickTime = performance.now();
+    });
+
+    const recordBtn = document.getElementById('record-btn');
+    let isRecording = false;
+
+    function startRecording() {
+      initAudio();
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(mediaStreamDest.stream);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+      };
+      mediaRecorder.onstop = async () => {
+        const webmBlob = new Blob(recordedChunks, { type: 'audio/webm' });
+        const arrayBuf = await webmBlob.arrayBuffer();
+        const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+
+        // Encode as WAV
+        const numChannels = audioBuf.numberOfChannels;
+        const sampleRate = audioBuf.sampleRate;
+        const length = audioBuf.length;
+        const wavBuf = new ArrayBuffer(44 + length * numChannels * 2);
+        const view = new DataView(wavBuf);
+
+        function writeString(offset, str) {
+          for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+        }
+
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + length * numChannels * 2, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * numChannels * 2, true);
+        view.setUint16(32, numChannels * 2, true);
+        view.setUint16(34, 16, true);
+        writeString(36, 'data');
+        view.setUint32(40, length * numChannels * 2, true);
+
+        const channels = [];
+        for (let c = 0; c < numChannels; c++) channels.push(audioBuf.getChannelData(c));
+
+        let offset = 44;
+        for (let i = 0; i < length; i++) {
+          for (let c = 0; c < numChannels; c++) {
+            const sample = Math.max(-1, Math.min(1, channels[c][i]));
+            view.setInt16(offset, sample * 0x7FFF, true);
+            offset += 2;
+          }
+        }
+
+        const wavBlob = new Blob([wavBuf], { type: 'audio/wav' });
+        const url = URL.createObjectURL(wavBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'teophone-' + new Date().toISOString().slice(0, 19).replace(/:/g, '-') + '.wav';
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+      mediaRecorder.start();
+      isRecording = true;
+      recordBtn.textContent = 'stop';
+      recordBtn.classList.add('recording');
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      isRecording = false;
+      recordBtn.textContent = 'rec';
+      recordBtn.classList.remove('recording');
+    }
+
+    recordBtn.addEventListener('click', () => {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        startRecording();
+      }
+    });
+
+    const shapeIndicator = document.getElementById('shape-indicator');
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Shift') shapeIndicator.classList.add('active');
+    });
+    window.addEventListener('keyup', (e) => {
+      if (e.key === 'Shift') shapeIndicator.classList.remove('active');
+    });
+
     let dragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
@@ -856,15 +1063,26 @@
     let dragSavedVy = 0;
 
     function stoneAtPoint(x, y) {
-      // Search in reverse so topmost (newest) stones are picked first
       for (let i = stones.length - 1; i >= 0; i--) {
         const s = stones[i];
-        const dx = x - s.x;
-        const dy = y - s.y;
-        if (dx * dx + dy * dy <= s.radius * s.radius) return s;
+        if (s.shape === 'square') {
+          if (Math.abs(x - s.x) <= s.radius && Math.abs(y - s.y) <= s.radius) return s;
+        } else {
+          const dx = x - s.x;
+          const dy = y - s.y;
+          if (dx * dx + dy * dy <= s.radius * s.radius) return s;
+        }
       }
       return null;
     }
+
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const stone = stoneAtPoint(e.clientX, e.clientY);
+      if (stone) {
+        stones.splice(stones.indexOf(stone), 1);
+      }
+    });
 
     canvas.addEventListener('mousedown', (e) => {
       if (isInsideKeyBox(e.clientX, e.clientY)) return;
@@ -908,6 +1126,9 @@
           const throwScale = 0.15;
           dragStone.vx = dx * throwScale;
           dragStone.vy = dy * throwScale;
+          // Enforce axis for squares
+          if (dragStone.axis === 'h') dragStone.vy = 0;
+          if (dragStone.axis === 'v') dragStone.vx = 0;
         }
         dragStone = null;
       } else if (mode === 'throw') {
@@ -918,8 +1139,8 @@
         const newVy = dist > 5 ? dy * scale : 0;
         for (const stone of stones) {
           if (stone.frozen) continue;
-          stone.vx = newVx;
-          stone.vy = newVy;
+          stone.vx = stone.axis === 'v' ? 0 : newVx;
+          stone.vy = stone.axis === 'h' ? 0 : newVy;
         }
       }
 
@@ -940,6 +1161,8 @@
       if (e.key === ' ') {
         e.preventDefault();
         paused = !paused;
+        pauseBtn.textContent = paused ? 'play' : 'pause';
+        pauseBtn.classList.toggle('paused', paused);
         if (!paused) {
           lastTickTime = performance.now();
         }
@@ -963,7 +1186,8 @@
       initAudio();
 
       const speedMult = parseFloat(speedSlider.value);
-      const stone = new Stone(mouseX, mouseY, type, speedMult, key);
+      const shape = e.shiftKey ? 'square' : 'circle';
+      const stone = new Stone(mouseX, mouseY, type, speedMult, key, shape);
       stones.push(stone);
     });
 
