@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>teophone</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0a;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+      cursor: crosshair;
+      user-select: none;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #speed-control {
+      position: fixed;
+      right: 32px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #speed-control label {
+      color: #333;
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+    }
+
+    #speed-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 120px;
+      height: 2px;
+      background: #222;
+      outline: none;
+      transform: rotate(-90deg);
+      transform-origin: center;
+    }
+
+    #speed-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 10px;
+      height: 10px;
+      background: #555;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    #speed-slider::-webkit-slider-thumb:hover {
+      background: #888;
+    }
+
+    #tempo-control {
+      position: fixed;
+      left: 32px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #tempo-control label {
+      color: #333;
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+    }
+
+    #tempo-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 120px;
+      height: 2px;
+      background: #222;
+      outline: none;
+      transform: rotate(-90deg);
+      transform-origin: center;
+    }
+
+    #tempo-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 10px;
+      height: 10px;
+      background: #555;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    #tempo-slider::-webkit-slider-thumb:hover {
+      background: #888;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="speed-control">
+    <input type="range" id="speed-slider" min="0.1" max="4" step="0.05" value="1">
+    <label>speed</label>
+  </div>
+  <div id="tempo-control">
+    <input type="range" id="tempo-slider" min="60" max="200" step="1" value="120">
+    <label>bpm</label>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const speedSlider = document.getElementById('speed-slider');
+    const tempoSlider = document.getElementById('tempo-slider');
+
+    let width, height;
+    let mouseX = 0;
+    let mouseY = 0;
+    let stones = [];
+    let audioCtx = null;
+
+    // --- Quantization ---
+    // Pending hits get snapped to the nearest 16th note
+    let pendingHits = [];
+    let lastTickTime = 0;
+
+    // --- Stone types mapped to keys ---
+    const STONE_KEYS = {
+      'a': { radius: 6,  mass: 1,   freq: 800,  color: '#e0e0e0', decay: 0.04 },
+      's': { radius: 9,  mass: 1.5, freq: 600,  color: '#c8c8c8', decay: 0.06 },
+      'd': { radius: 12, mass: 2,   freq: 440,  color: '#b0b0b0', decay: 0.08 },
+      'f': { radius: 16, mass: 3,   freq: 320,  color: '#989898', decay: 0.10 },
+      'g': { radius: 20, mass: 4,   freq: 220,  color: '#808080', decay: 0.12 },
+      'h': { radius: 25, mass: 5.5, freq: 160,  color: '#686868', decay: 0.14 },
+      'j': { radius: 30, mass: 7,   freq: 110,  color: '#505050', decay: 0.16 },
+      'k': { radius: 36, mass: 9,   freq: 80,   color: '#383838', decay: 0.18 },
+      'l': { radius: 42, mass: 12,  freq: 55,   color: '#282828', decay: 0.20 },
+    };
+
+    // --- Resize ---
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- Audio ---
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function queueHit(freq, velocity, decay) {
+      pendingHits.push({ freq, velocity, decay });
+    }
+
+    function flushHits() {
+      if (pendingHits.length === 0) return;
+
+      // Merge hits that are very similar (within an octave) to avoid overload
+      const merged = [];
+      for (const hit of pendingHits) {
+        let found = false;
+        for (const m of merged) {
+          if (Math.abs(m.freq - hit.freq) < m.freq * 0.5) {
+            m.velocity = Math.max(m.velocity, hit.velocity);
+            found = true;
+            break;
+          }
+        }
+        if (!found) merged.push({ ...hit });
+      }
+      pendingHits = [];
+
+      for (const hit of merged) {
+        playHit(hit.freq, hit.velocity, hit.decay);
+      }
+    }
+
+    function playHit(freq, velocity, decay) {
+      if (!audioCtx) return;
+      const vol = Math.min(1, velocity / 400);
+      if (vol < 0.01) return;
+
+      const now = audioCtx.currentTime;
+      const duration = decay * (0.5 + vol * 0.5);
+
+      // Noise burst for the attack
+      const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.15));
+      }
+
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = buffer;
+
+      const noiseFilter = audioCtx.createBiquadFilter();
+      noiseFilter.type = 'bandpass';
+      noiseFilter.frequency.value = freq * 2;
+      noiseFilter.Q.value = 1.5;
+
+      const noiseGain = audioCtx.createGain();
+      noiseGain.gain.setValueAtTime(vol * 0.4, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(audioCtx.destination);
+      noise.start(now);
+      noise.stop(now + duration);
+
+      // Tone body
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.5, now + duration);
+
+      const oscGain = audioCtx.createGain();
+      oscGain.gain.setValueAtTime(vol * 0.3, now);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+      osc.connect(oscGain);
+      oscGain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + duration);
+    }
+
+    // --- Stone ---
+    class Stone {
+      constructor(x, y, type) {
+        this.x = x;
+        this.y = y;
+        // Random direction, consistent base speed
+        const angle = Math.random() * Math.PI * 2;
+        const baseSpeed = 2 + Math.random() * 3;
+        this.baseVx = Math.cos(angle) * baseSpeed;
+        this.baseVy = Math.sin(angle) * baseSpeed;
+        this.vx = this.baseVx;
+        this.vy = this.baseVy;
+        this.radius = type.radius;
+        this.mass = type.mass;
+        this.freq = type.freq;
+        this.color = type.color;
+        this.decay = type.decay;
+        this.flash = 0;
+      }
+
+      update(speedMult) {
+        this.x += this.vx * speedMult;
+        this.y += this.vy * speedMult;
+
+        // Flash decay
+        if (this.flash > 0) this.flash -= 0.05;
+
+        // Wall collisions — all four edges
+        if (this.x - this.radius < 0) {
+          this.x = this.radius;
+          this.vx = Math.abs(this.vx);
+          const impact = Math.abs(this.vx) * speedMult * this.mass;
+          if (impact > 1) {
+            queueHit(this.freq, impact * 20, this.decay);
+            this.flash = Math.min(1, impact / 10);
+          }
+        }
+        if (this.x + this.radius > width) {
+          this.x = width - this.radius;
+          this.vx = -Math.abs(this.vx);
+          const impact = Math.abs(this.vx) * speedMult * this.mass;
+          if (impact > 1) {
+            queueHit(this.freq, impact * 20, this.decay);
+            this.flash = Math.min(1, impact / 10);
+          }
+        }
+        if (this.y - this.radius < 0) {
+          this.y = this.radius;
+          this.vy = Math.abs(this.vy);
+          const impact = Math.abs(this.vy) * speedMult * this.mass;
+          if (impact > 1) {
+            queueHit(this.freq, impact * 20, this.decay);
+            this.flash = Math.min(1, impact / 10);
+          }
+        }
+        if (this.y + this.radius > height) {
+          this.y = height - this.radius;
+          this.vy = -Math.abs(this.vy);
+          const impact = Math.abs(this.vy) * speedMult * this.mass;
+          if (impact > 1) {
+            queueHit(this.freq, impact * 20, this.decay);
+            this.flash = Math.min(1, impact / 10);
+          }
+        }
+      }
+
+      draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+
+        if (this.flash > 0) {
+          const brightness = Math.floor(this.flash * 255);
+          ctx.fillStyle = `rgb(${brightness}, ${brightness}, ${brightness})`;
+        } else {
+          ctx.fillStyle = this.color;
+        }
+        ctx.fill();
+      }
+    }
+
+    // --- Stone-stone collisions ---
+    function collideStones() {
+      for (let i = 0; i < stones.length; i++) {
+        for (let j = i + 1; j < stones.length; j++) {
+          const a = stones[i];
+          const b = stones[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const minDist = a.radius + b.radius;
+
+          if (dist < minDist && dist > 0) {
+            const nx = dx / dist;
+            const ny = dy / dist;
+
+            const dvx = a.vx - b.vx;
+            const dvy = a.vy - b.vy;
+            const dvn = dvx * nx + dvy * ny;
+
+            if (dvn > 0) {
+              // Save speeds before collision
+              const aSpeed = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+              const bSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+
+              const impulse = dvn / (1 / a.mass + 1 / b.mass);
+
+              a.vx -= (impulse / a.mass) * nx;
+              a.vy -= (impulse / a.mass) * ny;
+              b.vx += (impulse / b.mass) * nx;
+              b.vy += (impulse / b.mass) * ny;
+
+              // Restore original speeds (change direction, not magnitude)
+              const aNewSpeed = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+              const bNewSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+              if (aNewSpeed > 0) { a.vx *= aSpeed / aNewSpeed; a.vy *= aSpeed / aNewSpeed; }
+              if (bNewSpeed > 0) { b.vx *= bSpeed / bNewSpeed; b.vy *= bSpeed / bNewSpeed; }
+
+              // Sound — blend the two frequencies
+              const speedMult = parseFloat(speedSlider.value);
+              const impact = Math.abs(dvn) * speedMult;
+              if (impact > 1) {
+                const mixedFreq = (a.freq + b.freq) / 2;
+                const mixedDecay = (a.decay + b.decay) / 2;
+                queueHit(mixedFreq, impact * Math.min(a.mass, b.mass) * 15, mixedDecay);
+                a.flash = Math.min(1, impact / 8);
+                b.flash = Math.min(1, impact / 8);
+              }
+            }
+
+            // Separate overlapping stones
+            const overlap = minDist - dist;
+            const totalMass = a.mass + b.mass;
+            a.x -= (overlap * (b.mass / totalMass)) * nx;
+            a.y -= (overlap * (b.mass / totalMass)) * ny;
+            b.x += (overlap * (a.mass / totalMass)) * nx;
+            b.y += (overlap * (a.mass / totalMass)) * ny;
+          }
+        }
+      }
+    }
+
+    // --- Draw ---
+    function drawKeyHints() {
+      const keys = Object.keys(STONE_KEYS);
+      const hintY = height - 24;
+      ctx.font = '10px Courier New';
+      ctx.textAlign = 'center';
+
+      keys.forEach((key, i) => {
+        const type = STONE_KEYS[key];
+        const x = 40 + i * 36;
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillText(key, x, hintY);
+
+        ctx.beginPath();
+        ctx.arc(x, hintY - 14, type.radius * 0.3, 0, Math.PI * 2);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fill();
+      });
+    }
+
+    // --- Loop ---
+    function loop() {
+      const now = performance.now();
+
+      // Quantize: flush pending hits on each 16th note tick
+      const bpm = parseFloat(tempoSlider.value);
+      const sixteenthMs = (60000 / bpm) / 4;
+      if (now - lastTickTime >= sixteenthMs) {
+        lastTickTime = now - ((now - lastTickTime) % sixteenthMs);
+        flushHits();
+      }
+
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fillRect(0, 0, width, height);
+
+      const speedMult = parseFloat(speedSlider.value);
+
+      drawKeyHints();
+
+      for (const stone of stones) {
+        stone.update(speedMult);
+      }
+      collideStones();
+      for (const stone of stones) {
+        stone.draw();
+      }
+
+      if (stones.length > 200) {
+        stones = stones.slice(-200);
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    // --- Input ---
+    window.addEventListener('mousemove', (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      const key = e.key.toLowerCase();
+
+      if (key === 'escape') {
+        stones = [];
+        return;
+      }
+
+      const type = STONE_KEYS[key];
+      if (!type) return;
+
+      initAudio();
+
+      const stone = new Stone(mouseX, mouseY, type);
+      stones.push(stone);
+    });
+
+    // Start
+    loop();
+  </script>
+</body>
+</html>
