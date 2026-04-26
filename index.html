@@ -31,7 +31,7 @@
     }
 
     #speed-control label {
-      color: #333;
+      color: #666;
       font-size: 10px;
       letter-spacing: 2px;
       text-transform: uppercase;
@@ -44,7 +44,7 @@
       appearance: none;
       width: 120px;
       height: 2px;
-      background: #222;
+      background: #444;
       outline: none;
       transform: rotate(-90deg);
       transform-origin: center;
@@ -55,13 +55,13 @@
       appearance: none;
       width: 10px;
       height: 10px;
-      background: #555;
+      background: #aaa;
       border-radius: 50%;
       cursor: pointer;
     }
 
     #speed-slider::-webkit-slider-thumb:hover {
-      background: #888;
+      background: #ccc;
     }
 
     #tempo-control {
@@ -76,7 +76,7 @@
     }
 
     #tempo-control label {
-      color: #333;
+      color: #666;
       font-size: 10px;
       letter-spacing: 2px;
       text-transform: uppercase;
@@ -89,7 +89,7 @@
       appearance: none;
       width: 120px;
       height: 2px;
-      background: #222;
+      background: #444;
       outline: none;
       transform: rotate(-90deg);
       transform-origin: center;
@@ -100,13 +100,59 @@
       appearance: none;
       width: 10px;
       height: 10px;
-      background: #555;
+      background: #aaa;
       border-radius: 50%;
       cursor: pointer;
     }
 
     #tempo-slider::-webkit-slider-thumb:hover {
-      background: #888;
+      background: #ccc;
+    }
+
+    #pulses-control {
+      position: fixed;
+      left: 32px;
+      bottom: 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #pulses-control label {
+      color: #666;
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    #pulses-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 120px;
+      height: 2px;
+      background: #444;
+      outline: none;
+    }
+
+    #pulses-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 10px;
+      height: 10px;
+      background: #aaa;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    #pulses-slider::-webkit-slider-thumb:hover {
+      background: #ccc;
+    }
+
+    #pulses-display {
+      color: #666;
+      font-size: 10px;
+      letter-spacing: 1px;
     }
   </style>
 </head>
@@ -120,12 +166,23 @@
     <input type="range" id="tempo-slider" min="60" max="200" step="1" value="120">
     <label>bpm</label>
   </div>
+  <div id="pulses-control">
+    <span id="pulses-display">16</span>
+    <input type="range" id="pulses-slider" min="1" max="64" step="1" value="16">
+    <label>pulses</label>
+  </div>
 
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const speedSlider = document.getElementById('speed-slider');
     const tempoSlider = document.getElementById('tempo-slider');
+    const pulsesSlider = document.getElementById('pulses-slider');
+    const pulsesDisplay = document.getElementById('pulses-display');
+
+    pulsesSlider.addEventListener('input', () => {
+      pulsesDisplay.textContent = pulsesSlider.value;
+    });
 
     let width, height;
     let mouseX = 0;
@@ -137,6 +194,8 @@
     // Pending hits get snapped to the nearest 16th note
     let pendingHits = [];
     let lastTickTime = 0;
+    let currentPulse = 0;
+    let pulseFlash = 0;
 
     // --- Stone types mapped to keys ---
     const STONE_KEYS = {
@@ -385,6 +444,30 @@
     }
 
     // --- Draw ---
+    function drawPulseBar(pulses) {
+      const margin = 80;
+      const totalWidth = width - margin * 2;
+      const dotSpacing = totalWidth / Math.max(pulses - 1, 1);
+      const y = 20;
+
+      for (let i = 0; i < pulses; i++) {
+        const x = pulses === 1 ? width / 2 : margin + i * dotSpacing;
+        const isCurrent = i === currentPulse;
+        const radius = isCurrent ? 4 : 2;
+
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+
+        if (isCurrent) {
+          const b = Math.floor(80 + pulseFlash * 175);
+          ctx.fillStyle = `rgb(${b}, ${b}, ${b})`;
+        } else {
+          ctx.fillStyle = '#222';
+        }
+        ctx.fill();
+      }
+    }
+
     function drawKeyHints() {
       const keys = Object.keys(STONE_KEYS);
       const hintY = height - 24;
@@ -408,19 +491,26 @@
     function loop() {
       const now = performance.now();
 
-      // Quantize: flush pending hits on each 16th note tick
+      // Quantize: flush pending hits on each pulse tick
+      // One measure = 4 beats at the given BPM, divided into N pulses
       const bpm = parseFloat(tempoSlider.value);
-      const sixteenthMs = (60000 / bpm) / 4;
-      if (now - lastTickTime >= sixteenthMs) {
-        lastTickTime = now - ((now - lastTickTime) % sixteenthMs);
+      const pulses = parseInt(pulsesSlider.value);
+      const measureMs = (60000 / bpm) * 4;
+      const pulseMs = measureMs / pulses;
+      if (now - lastTickTime >= pulseMs) {
+        lastTickTime = now - ((now - lastTickTime) % pulseMs);
+        currentPulse = (currentPulse + 1) % pulses;
+        pulseFlash = 1;
         flushHits();
       }
+      if (pulseFlash > 0) pulseFlash -= 0.06;
 
       ctx.fillStyle = '#0a0a0a';
       ctx.fillRect(0, 0, width, height);
 
       const speedMult = parseFloat(speedSlider.value);
 
+      drawPulseBar(pulses);
       drawKeyHints();
 
       for (const stone of stones) {
