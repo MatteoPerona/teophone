@@ -1244,6 +1244,81 @@
       dragging = false;
     });
 
+    // --- Touch events (mirror mouse logic for mobile) ---
+    canvas.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      if (isInsideKeyBox(touch.clientX, touch.clientY)) return;
+
+      if (mode === 'drag' && selectedKey && !stoneAtPoint(touch.clientX, touch.clientY)) {
+        initAudio();
+        const type = STONE_KEYS[selectedKey];
+        const speedMult = parseFloat(speedSlider.value);
+        const stone = new Stone(touch.clientX, touch.clientY, type, speedMult, selectedKey);
+        stones.push(stone);
+        return;
+      }
+
+      dragging = true;
+      dragStartX = touch.clientX;
+      dragStartY = touch.clientY;
+      mouseX = touch.clientX;
+      mouseY = touch.clientY;
+      dragStone = stoneAtPoint(touch.clientX, touch.clientY);
+      if (dragStone) {
+        dragStone.frozen = true;
+        dragSavedVx = dragStone.vx;
+        dragSavedVy = dragStone.vy;
+        dragStone.vx = 0;
+        dragStone.vy = 0;
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchmove', (e) => {
+      const touch = e.touches[0];
+      mouseX = touch.clientX;
+      mouseY = touch.clientY;
+
+      if (dragging && dragStone) {
+        dragStone.x = touch.clientX;
+        dragStone.y = touch.clientY;
+      }
+    }, { passive: true });
+
+    window.addEventListener('touchend', (e) => {
+      if (!dragging) return;
+
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - dragStartX;
+      const dy = touch.clientY - dragStartY;
+
+      if (dragStone) {
+        dragStone.frozen = false;
+        if (mode === 'drag') {
+          dragStone.vx = dragSavedVx;
+          dragStone.vy = dragSavedVy;
+        } else {
+          const throwScale = 0.15;
+          dragStone.vx = dx * throwScale;
+          dragStone.vy = dy * throwScale;
+          if (dragStone.axis === 'h') dragStone.vy = 0;
+          if (dragStone.axis === 'v') dragStone.vx = 0;
+        }
+        dragStone = null;
+      } else if (mode === 'throw') {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const scale = 0.1;
+        const newVx = dist > 5 ? dx * scale : 0;
+        const newVy = dist > 5 ? dy * scale : 0;
+        for (const stone of stones) {
+          if (stone.frozen) continue;
+          stone.vx = stone.axis === 'v' ? 0 : newVx;
+          stone.vy = stone.axis === 'h' ? 0 : newVy;
+        }
+      }
+
+      dragging = false;
+    });
+
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       if (e.target === bpmInput) return;
