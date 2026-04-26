@@ -21,13 +21,13 @@
 
     #speed-control {
       position: fixed;
-      right: 32px;
+      right: 24px;
       top: 50%;
       transform: translateY(-50%);
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       align-items: center;
-      gap: 8px;
+      gap: 2px;
     }
 
     #speed-control label {
@@ -66,13 +66,13 @@
 
     #tempo-control {
       position: fixed;
-      left: 32px;
+      left: 24px;
       top: 50%;
       transform: translateY(-50%);
       display: flex;
-      flex-direction: column;
+      flex-direction: row;
       align-items: center;
-      gap: 8px;
+      gap: 2px;
     }
 
     #tempo-control label {
@@ -154,12 +154,34 @@
       font-size: 10px;
       letter-spacing: 1px;
     }
+
+    #mode-toggle {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: none;
+      border: 1px solid #444;
+      color: #888;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 2px;
+    }
+
+    #mode-toggle:hover {
+      border-color: #888;
+      color: #ccc;
+    }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
+  <button id="mode-toggle">throw</button>
   <div id="speed-control">
-    <input type="range" id="speed-slider" min="0.1" max="4" step="0.05" value="1">
+    <input type="range" id="speed-slider" min="0" max="4" step="0.05" value="1">
     <label>speed</label>
   </div>
   <div id="tempo-control">
@@ -189,6 +211,10 @@
     let mouseY = 0;
     let stones = [];
     let audioCtx = null;
+
+    // --- Window movement tracking ---
+    let lastScreenX = window.screenX;
+    let lastScreenY = window.screenY;
 
     // --- Quantization ---
     // Pending hits get snapped to the nearest 16th note
@@ -304,27 +330,31 @@
 
     // --- Stone ---
     class Stone {
-      constructor(x, y, type) {
+      constructor(x, y, type, speedMult) {
         this.x = x;
         this.y = y;
-        // Random direction, consistent base speed
-        const angle = Math.random() * Math.PI * 2;
-        const baseSpeed = 2 + Math.random() * 3;
-        this.baseVx = Math.cos(angle) * baseSpeed;
-        this.baseVy = Math.sin(angle) * baseSpeed;
-        this.vx = this.baseVx;
-        this.vy = this.baseVy;
+        if (speedMult === 0) {
+          this.vx = 0;
+          this.vy = 0;
+        } else {
+          const angle = Math.random() * Math.PI * 2;
+          const baseSpeed = (2 + Math.random() * 3) * speedMult;
+          this.vx = Math.cos(angle) * baseSpeed;
+          this.vy = Math.sin(angle) * baseSpeed;
+        }
         this.radius = type.radius;
         this.mass = type.mass;
         this.freq = type.freq;
         this.color = type.color;
         this.decay = type.decay;
         this.flash = 0;
+        this.frozen = false;
       }
 
-      update(speedMult) {
-        this.x += this.vx * speedMult;
-        this.y += this.vy * speedMult;
+      update() {
+        if (this.frozen) return;
+        this.x += this.vx;
+        this.y += this.vy;
 
         // Flash decay
         if (this.flash > 0) this.flash -= 0.05;
@@ -333,7 +363,7 @@
         if (this.x - this.radius < 0) {
           this.x = this.radius;
           this.vx = Math.abs(this.vx);
-          const impact = Math.abs(this.vx) * speedMult * this.mass;
+          const impact = Math.abs(this.vx) * this.mass;
           if (impact > 1) {
             queueHit(this.freq, impact * 20, this.decay);
             this.flash = Math.min(1, impact / 10);
@@ -342,7 +372,7 @@
         if (this.x + this.radius > width) {
           this.x = width - this.radius;
           this.vx = -Math.abs(this.vx);
-          const impact = Math.abs(this.vx) * speedMult * this.mass;
+          const impact = Math.abs(this.vx) * this.mass;
           if (impact > 1) {
             queueHit(this.freq, impact * 20, this.decay);
             this.flash = Math.min(1, impact / 10);
@@ -351,7 +381,7 @@
         if (this.y - this.radius < 0) {
           this.y = this.radius;
           this.vy = Math.abs(this.vy);
-          const impact = Math.abs(this.vy) * speedMult * this.mass;
+          const impact = Math.abs(this.vy) * this.mass;
           if (impact > 1) {
             queueHit(this.freq, impact * 20, this.decay);
             this.flash = Math.min(1, impact / 10);
@@ -360,7 +390,7 @@
         if (this.y + this.radius > height) {
           this.y = height - this.radius;
           this.vy = -Math.abs(this.vy);
-          const impact = Math.abs(this.vy) * speedMult * this.mass;
+          const impact = Math.abs(this.vy) * this.mass;
           if (impact > 1) {
             queueHit(this.freq, impact * 20, this.decay);
             this.flash = Math.min(1, impact / 10);
@@ -420,8 +450,7 @@
               if (bNewSpeed > 0) { b.vx *= bSpeed / bNewSpeed; b.vy *= bSpeed / bNewSpeed; }
 
               // Sound — blend the two frequencies
-              const speedMult = parseFloat(speedSlider.value);
-              const impact = Math.abs(dvn) * speedMult;
+              const impact = Math.abs(dvn);
               if (impact > 1) {
                 const mixedFreq = (a.freq + b.freq) / 2;
                 const mixedDecay = (a.decay + b.decay) / 2;
@@ -505,20 +534,95 @@
       }
       if (pulseFlash > 0) pulseFlash -= 0.06;
 
+      // Window movement — offset stones instantly, let wall collisions handle the rest
+      const screenDx = window.screenX - lastScreenX;
+      const screenDy = window.screenY - lastScreenY;
+      lastScreenX = window.screenX;
+      lastScreenY = window.screenY;
+
+      if (screenDx !== 0 || screenDy !== 0) {
+        for (const stone of stones) {
+          stone.x -= screenDx;
+          stone.y -= screenDy;
+        }
+      }
+
       ctx.fillStyle = '#0a0a0a';
       ctx.fillRect(0, 0, width, height);
-
-      const speedMult = parseFloat(speedSlider.value);
 
       drawPulseBar(pulses);
       drawKeyHints();
 
       for (const stone of stones) {
-        stone.update(speedMult);
+        stone.update();
       }
       collideStones();
       for (const stone of stones) {
         stone.draw();
+      }
+
+      // Draw drag vector
+      if (dragging && !dragStone && mode === 'throw') {
+        const dx = mouseX - dragStartX;
+        const dy = mouseY - dragStartY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 5) {
+          const speed = (dist * 0.1).toFixed(1);
+
+          // Line
+          ctx.beginPath();
+          ctx.moveTo(dragStartX, dragStartY);
+          ctx.lineTo(mouseX, mouseY);
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // Arrowhead
+          const angle = Math.atan2(dy, dx);
+          const headLen = 8;
+          ctx.beginPath();
+          ctx.moveTo(mouseX, mouseY);
+          ctx.lineTo(mouseX - headLen * Math.cos(angle - 0.4), mouseY - headLen * Math.sin(angle - 0.4));
+          ctx.moveTo(mouseX, mouseY);
+          ctx.lineTo(mouseX - headLen * Math.cos(angle + 0.4), mouseY - headLen * Math.sin(angle + 0.4));
+          ctx.strokeStyle = '#fff';
+          ctx.stroke();
+
+          // Speed label
+          ctx.font = '11px Courier New';
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'left';
+          ctx.fillText(speed, mouseX + 10, mouseY - 10);
+        }
+      } else if (dragging && dragStone && mode === 'throw') {
+        const dx = mouseX - dragStartX;
+        const dy = mouseY - dragStartY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 5) {
+          const speed = (dist * 0.15).toFixed(1);
+
+          ctx.beginPath();
+          ctx.moveTo(dragStone.x, dragStone.y);
+          ctx.lineTo(dragStone.x + dx, dragStone.y + dy);
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          const angle = Math.atan2(dy, dx);
+          const headLen = 8;
+          ctx.beginPath();
+          ctx.moveTo(dragStone.x + dx, dragStone.y + dy);
+          ctx.lineTo(dragStone.x + dx - headLen * Math.cos(angle - 0.4), dragStone.y + dy - headLen * Math.sin(angle - 0.4));
+          ctx.moveTo(dragStone.x + dx, dragStone.y + dy);
+          ctx.lineTo(dragStone.x + dx - headLen * Math.cos(angle + 0.4), dragStone.y + dy - headLen * Math.sin(angle + 0.4));
+          ctx.strokeStyle = '#fff';
+          ctx.stroke();
+
+          ctx.font = '11px Courier New';
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'left';
+          ctx.fillText(speed, dragStone.x + dx + 10, dragStone.y + dy - 10);
+        }
       }
 
       if (stones.length > 200) {
@@ -529,17 +633,108 @@
     }
 
     // --- Input ---
+    let mode = 'throw'; // 'throw' or 'drag'
+    const modeToggle = document.getElementById('mode-toggle');
+    modeToggle.addEventListener('click', () => {
+      mode = mode === 'throw' ? 'drag' : 'throw';
+      modeToggle.textContent = mode;
+    });
+
+    let dragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStone = null;
+    let dragSavedVx = 0;
+    let dragSavedVy = 0;
+
+    function stoneAtPoint(x, y) {
+      // Search in reverse so topmost (newest) stones are picked first
+      for (let i = stones.length - 1; i >= 0; i--) {
+        const s = stones[i];
+        const dx = x - s.x;
+        const dy = y - s.y;
+        if (dx * dx + dy * dy <= s.radius * s.radius) return s;
+      }
+      return null;
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      dragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      dragStone = stoneAtPoint(e.clientX, e.clientY);
+      if (dragStone) {
+        dragStone.frozen = true;
+        dragSavedVx = dragStone.vx;
+        dragSavedVy = dragStone.vy;
+        dragStone.vx = 0;
+        dragStone.vy = 0;
+      }
+    });
+
     window.addEventListener('mousemove', (e) => {
       mouseX = e.clientX;
       mouseY = e.clientY;
+
+      if (dragging && dragStone) {
+        dragStone.x = e.clientX;
+        dragStone.y = e.clientY;
+      }
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (!dragging) return;
+
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+
+      if (dragStone) {
+        dragStone.frozen = false;
+        if (mode === 'drag') {
+          // Restore original velocity
+          dragStone.vx = dragSavedVx;
+          dragStone.vy = dragSavedVy;
+        } else {
+          // Throw with new velocity
+          const throwScale = 0.15;
+          dragStone.vx = dx * throwScale;
+          dragStone.vy = dy * throwScale;
+        }
+        dragStone = null;
+      } else if (mode === 'throw') {
+        // Set all stones to the exact drag direction and speed
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const scale = 0.1;
+        const newVx = dist > 5 ? dx * scale : 0;
+        const newVy = dist > 5 ? dy * scale : 0;
+        for (const stone of stones) {
+          if (stone.frozen) continue;
+          stone.vx = newVx;
+          stone.vy = newVy;
+        }
+      }
+
+      dragging = false;
     });
 
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       const key = e.key.toLowerCase();
 
+      if (key === 'q') {
+        mode = mode === 'throw' ? 'drag' : 'throw';
+        modeToggle.textContent = mode;
+        return;
+      }
+
       if (key === 'escape') {
         stones = [];
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && key === 'z') {
+        e.preventDefault();
+        stones.pop();
         return;
       }
 
@@ -548,7 +743,8 @@
 
       initAudio();
 
-      const stone = new Stone(mouseX, mouseY, type);
+      const speedMult = parseFloat(speedSlider.value);
+      const stone = new Stone(mouseX, mouseY, type, speedMult);
       stones.push(stone);
     });
 
