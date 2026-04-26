@@ -175,11 +175,89 @@
       border-color: #888;
       color: #ccc;
     }
+
+    #sound-menu {
+      display: none;
+      position: fixed;
+      bottom: 80px;
+      right: 20px;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 3px;
+      padding: 12px 16px;
+      font-family: 'Courier New', monospace;
+      z-index: 10;
+    }
+
+    #sound-menu.open {
+      display: block;
+    }
+
+    #sound-menu h3 {
+      color: #666;
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin: 0 0 10px 0;
+      font-weight: normal;
+    }
+
+    .sound-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 0;
+    }
+
+    .sound-row .key-label {
+      color: #888;
+      font-size: 12px;
+      width: 14px;
+      text-align: center;
+    }
+
+    .sound-row .sound-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .sound-row .sound-name {
+      color: #555;
+      font-size: 10px;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 120px;
+    }
+
+    .sound-row .upload-btn {
+      background: none;
+      border: 1px solid #333;
+      color: #666;
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      padding: 2px 6px;
+      cursor: pointer;
+      border-radius: 2px;
+    }
+
+    .sound-row .upload-btn:hover {
+      border-color: #666;
+      color: #aaa;
+    }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
+  <input type="file" id="sample-upload" accept="audio/*" style="display:none">
   <button id="mode-toggle">throw</button>
+  <div id="sound-menu">
+    <h3>sounds</h3>
+    <div id="sound-rows"></div>
+  </div>
   <div id="speed-control">
     <input type="range" id="speed-slider" min="0" max="4" step="0.05" value="1">
     <label>speed</label>
@@ -244,6 +322,29 @@
     window.addEventListener('resize', resize);
     resize();
 
+    // --- Custom samples ---
+    const customSamples = {}; // key -> AudioBuffer
+    const sampleUpload = document.getElementById('sample-upload');
+    let uploadTargetKey = null;
+
+    sampleUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file || !uploadTargetKey) return;
+      initAudio();
+      const key = uploadTargetKey;
+      const reader = new FileReader();
+      reader.onload = () => {
+        audioCtx.decodeAudioData(reader.result, (buffer) => {
+          customSamples[key] = buffer;
+          sampleNames[key] = file.name;
+          buildSoundMenu();
+        });
+      };
+      reader.readAsArrayBuffer(file);
+      sampleUpload.value = '';
+      uploadTargetKey = null;
+    });
+
     // --- Audio ---
     function initAudio() {
       if (!audioCtx) {
@@ -251,19 +352,35 @@
       }
     }
 
-    function queueHit(freq, velocity, decay) {
-      pendingHits.push({ freq, velocity, decay });
+    function playSample(key, velocity) {
+      if (!audioCtx || !customSamples[key]) return;
+      const vol = Math.min(1, velocity / 400);
+      if (vol < 0.01) return;
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = customSamples[key];
+
+      const gain = audioCtx.createGain();
+      gain.gain.value = vol;
+
+      source.connect(gain);
+      gain.connect(audioCtx.destination);
+      source.start();
+    }
+
+    function queueHit(freq, velocity, decay, key) {
+      pendingHits.push({ freq, velocity, decay, key });
     }
 
     function flushHits() {
       if (pendingHits.length === 0) return;
 
-      // Merge hits that are very similar (within an octave) to avoid overload
+      // Merge hits that are very similar (same key or within an octave) to avoid overload
       const merged = [];
       for (const hit of pendingHits) {
         let found = false;
         for (const m of merged) {
-          if (Math.abs(m.freq - hit.freq) < m.freq * 0.5) {
+          if (m.key === hit.key && Math.abs(m.freq - hit.freq) < m.freq * 0.5) {
             m.velocity = Math.max(m.velocity, hit.velocity);
             found = true;
             break;
@@ -274,7 +391,11 @@
       pendingHits = [];
 
       for (const hit of merged) {
-        playHit(hit.freq, hit.velocity, hit.decay);
+        if (hit.key && customSamples[hit.key]) {
+          playSample(hit.key, hit.velocity);
+        } else {
+          playHit(hit.freq, hit.velocity, hit.decay);
+        }
       }
     }
 
@@ -330,7 +451,8 @@
 
     // --- Stone ---
     class Stone {
-      constructor(x, y, type, speedMult) {
+      constructor(x, y, type, speedMult, key) {
+        this.key = key;
         this.x = x;
         this.y = y;
         if (speedMult === 0) {
@@ -365,7 +487,7 @@
           this.vx = Math.abs(this.vx);
           const impact = Math.abs(this.vx) * this.mass;
           if (impact > 1) {
-            queueHit(this.freq, impact * 20, this.decay);
+            queueHit(this.freq, impact * 20, this.decay, this.key);
             this.flash = Math.min(1, impact / 10);
           }
         }
@@ -374,7 +496,7 @@
           this.vx = -Math.abs(this.vx);
           const impact = Math.abs(this.vx) * this.mass;
           if (impact > 1) {
-            queueHit(this.freq, impact * 20, this.decay);
+            queueHit(this.freq, impact * 20, this.decay, this.key);
             this.flash = Math.min(1, impact / 10);
           }
         }
@@ -383,7 +505,7 @@
           this.vy = Math.abs(this.vy);
           const impact = Math.abs(this.vy) * this.mass;
           if (impact > 1) {
-            queueHit(this.freq, impact * 20, this.decay);
+            queueHit(this.freq, impact * 20, this.decay, this.key);
             this.flash = Math.min(1, impact / 10);
           }
         }
@@ -392,7 +514,7 @@
           this.vy = -Math.abs(this.vy);
           const impact = Math.abs(this.vy) * this.mass;
           if (impact > 1) {
-            queueHit(this.freq, impact * 20, this.decay);
+            queueHit(this.freq, impact * 20, this.decay, this.key);
             this.flash = Math.min(1, impact / 10);
           }
         }
@@ -449,12 +571,12 @@
               if (aNewSpeed > 0) { a.vx *= aSpeed / aNewSpeed; a.vy *= aSpeed / aNewSpeed; }
               if (bNewSpeed > 0) { b.vx *= bSpeed / bNewSpeed; b.vy *= bSpeed / bNewSpeed; }
 
-              // Sound — blend the two frequencies
+              // Sound — play both stones' sounds
               const impact = Math.abs(dvn);
               if (impact > 1) {
-                const mixedFreq = (a.freq + b.freq) / 2;
-                const mixedDecay = (a.decay + b.decay) / 2;
-                queueHit(mixedFreq, impact * Math.min(a.mass, b.mass) * 15, mixedDecay);
+                const vol = impact * Math.min(a.mass, b.mass) * 15;
+                queueHit(a.freq, vol, a.decay, a.key);
+                queueHit(b.freq, vol, b.decay, b.key);
                 a.flash = Math.min(1, impact / 8);
                 b.flash = Math.min(1, impact / 8);
               }
@@ -497,24 +619,109 @@
       }
     }
 
-    function drawKeyHints() {
+    function getKeyHintBounds() {
       const keys = Object.keys(STONE_KEYS);
-      const hintY = height - 24;
+      const count = keys.length;
+      const spacing = 36;
+      const totalWidth = (count - 1) * spacing;
+      const maxRadius = 42 * 0.3; // largest ball preview radius
+      const padX = 20;
+      const padY = 20;
+      const boxRight = width - 20;
+      const boxBottom = height - 16;
+      const boxHeight = maxRadius * 2 + 24 + padY * 2; // circles + text + padding
+      const boxTop = boxBottom - boxHeight;
+      const startX = boxRight - padX - totalWidth;
+      const boxLeft = startX - padX;
+      const centerY = boxTop + padY + maxRadius; // vertical center for circles
+      const textY = centerY + maxRadius + 16; // text below circles
+      return { keys, startX, centerY, textY, spacing, boxLeft, boxTop, boxRight, boxBottom };
+    }
+
+    function drawKeyHints() {
+      const { keys, startX, centerY, textY, spacing, boxLeft, boxTop, boxRight, boxBottom } = getKeyHintBounds();
+
+      // Outline box
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(boxLeft, boxTop, boxRight - boxLeft, boxBottom - boxTop);
+
       ctx.font = '10px Courier New';
       ctx.textAlign = 'center';
 
       keys.forEach((key, i) => {
         const type = STONE_KEYS[key];
-        const x = 40 + i * 36;
-        ctx.fillStyle = '#1a1a1a';
-        ctx.fillText(key, x, hintY);
+        const x = startX + i * spacing;
+        const hasCustom = !!customSamples[key];
+        ctx.fillStyle = hasCustom ? '#888' : '#333';
+        ctx.fillText(key, x, textY);
 
         ctx.beginPath();
-        ctx.arc(x, hintY - 14, type.radius * 0.3, 0, Math.PI * 2);
-        ctx.fillStyle = '#1a1a1a';
+        ctx.arc(x, centerY, type.radius * 0.3, 0, Math.PI * 2);
+        ctx.fillStyle = hasCustom ? '#888' : '#333';
         ctx.fill();
       });
     }
+
+    // --- Sound menu ---
+    const soundMenu = document.getElementById('sound-menu');
+    const soundRows = document.getElementById('sound-rows');
+    const sampleNames = {}; // key -> filename
+
+    function buildSoundMenu() {
+      soundRows.innerHTML = '';
+      const keys = Object.keys(STONE_KEYS);
+      keys.forEach((key) => {
+        const type = STONE_KEYS[key];
+        const row = document.createElement('div');
+        row.className = 'sound-row';
+
+        const label = document.createElement('span');
+        label.className = 'key-label';
+        label.textContent = key;
+
+        const dot = document.createElement('span');
+        dot.className = 'sound-dot';
+        dot.style.background = type.color;
+
+        const name = document.createElement('span');
+        name.className = 'sound-name';
+        name.id = 'sound-name-' + key;
+        name.textContent = sampleNames[key] || 'default';
+
+        const btn = document.createElement('button');
+        btn.className = 'upload-btn';
+        btn.textContent = customSamples[key] ? 'change' : 'upload';
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          initAudio();
+          uploadTargetKey = key;
+          sampleUpload.click();
+        });
+
+        row.appendChild(label);
+        row.appendChild(dot);
+        row.appendChild(name);
+        row.appendChild(btn);
+        soundRows.appendChild(row);
+      });
+    }
+
+    buildSoundMenu();
+
+    // Toggle menu on click inside the ball box
+    function isInsideKeyBox(x, y) {
+      const { boxLeft, boxTop, boxRight, boxBottom } = getKeyHintBounds();
+      return x >= boxLeft && x <= boxRight && y >= boxTop && y <= boxBottom;
+    }
+
+    canvas.addEventListener('click', (e) => {
+      if (isInsideKeyBox(e.clientX, e.clientY)) {
+        soundMenu.classList.toggle('open');
+      } else if (soundMenu.classList.contains('open')) {
+        soundMenu.classList.remove('open');
+      }
+    });
 
     // --- Loop ---
     function loop() {
@@ -659,6 +866,7 @@
     }
 
     canvas.addEventListener('mousedown', (e) => {
+      if (isInsideKeyBox(e.clientX, e.clientY)) return;
       dragging = true;
       dragStartX = e.clientX;
       dragStartY = e.clientY;
@@ -744,7 +952,7 @@
       initAudio();
 
       const speedMult = parseFloat(speedSlider.value);
-      const stone = new Stone(mouseX, mouseY, type, speedMult);
+      const stone = new Stone(mouseX, mouseY, type, speedMult, key);
       stones.push(stone);
     });
 
