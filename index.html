@@ -253,6 +253,28 @@
       cursor: pointer;
     }
 
+    #undo-btn {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      background: none;
+      border: 1px solid #333;
+      color: #666;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 4px 8px;
+      cursor: pointer;
+      border-radius: 2px;
+      z-index: 5;
+    }
+
+    #undo-btn:hover {
+      border-color: #666;
+      color: #aaa;
+    }
+
     #sounds-btn {
       position: fixed;
       bottom: 16px;
@@ -386,6 +408,7 @@
   <button id="pause-btn">pause</button>
   <button id="record-btn">rec</button>
   <span id="shape-indicator">square</span>
+  <button id="undo-btn">undo</button>
   <button id="sounds-btn">sounds</button>
   <div id="sound-menu">
     <h3>sounds</h3>
@@ -876,6 +899,10 @@
     }
 
     buildSoundMenu();
+
+    document.getElementById('undo-btn').addEventListener('click', () => {
+      stones.pop();
+    });
 
     const soundsBtn = document.getElementById('sounds-btn');
     soundsBtn.addEventListener('click', () => {
